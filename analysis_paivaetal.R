@@ -28,20 +28,16 @@ lapply(needed_packages, require, character.only = TRUE)
 setwd("D:/repos/hearing_allometry")
 
 # Load ----
-# data per individual
-anuran_raw_data <- read.delim("froghearing_2.csv",
-                         sep = ";", header = TRUE) %>%
-  dplyr::select("Code.number", "species", "SVL", "DeltaF2", "TA") %>%
-  #filter(species != "Boana semilineata") #%>%
-  mutate(species = gsub(" ", "_", species))#,
-         #species = gsub('Boana_semilineata', 'Hypsiboas_semilineatus', species),
-         #species = gsub('Boana_albopunctata','Hypsiboas_albopunctatus', species),
-         #species = gsub('Phantasmarana_boticariana','Megaelosia_boticariana', 
-         #                species))
+load("raw_data.RData")
+
+# individual data
+anura_individual_data
+# species mean data
+anura_species_data
 
 # phylogeny data
 anurantree <- read.nexus("phylogeny/tree_amphibia.tre") # phylogeny
-# Remover uma única espécie
+# remove species duplicated
 anurantree <- drop.tip(anurantree, tip = c(
   "Boana_albopunctata 2",
   "Boana_semilineata 2",
@@ -55,7 +51,6 @@ anurantree <- drop.tip(anurantree, tip = c(
    "Pipa_pipa",                   
    "Rhinella_ornata 2",          
    "Thoropa_taophora 2"))
-plot(anurantree)
 
 # Descriptive statistics ----
 # Define custom labels
@@ -67,7 +62,7 @@ custom_labels <- c("SVL" = "Snout–vent length",
 
 # Create the ggpairs plot with custom labels
 p <- ggpairs(
-  anuran_raw_data, 
+  anura_individual_data, 
   columns = c(3:5), 
   upper = list(continuous = wrap("cor", method = "spearman")),
   lower = list(continuous = wrap("points", alpha = 0.5)),
@@ -80,11 +75,11 @@ p <- ggpairs(
   ); p
 
 # Correlacoes moderadas e altas entre as variaveis
-cor(anuran_raw_data[ , c("SVL", "DeltaF2", "TA")], 
+cor(anura_individual_data[ , c("SVL", "DeltaF2", "TA")], 
     method = "spearman", use = "complete.obs")
 # Altamente e significativamente correlacionadas
-cor.test(anuran_raw_data$SVL, anuran_raw_data$TA, method = "pearson") # 0.91
-usdm::vif(anuran_raw_data[ , c("SVL", "DeltaF2", "TA")])
+cor.test(anura_individual_data$SVL, anura_individual_data$TA, method = "pearson") # 0.91
+usdm::vif(anura_individual_data[ , c("SVL", "DeltaF2", "TA")])
 
 # Save the image
 dir.create('figures') # create folder to store images
@@ -95,12 +90,13 @@ ggsave(paste0(getwd(), "/figures/FigS1.ResponseCorr.png"), plot=p,
 
 # e-PGLS ----
 # transform variables if needed
-anurandata <- anuran_raw_data %>%
-  mutate(TA_raz = scale(TA/SVL),
-         TA = scale(TA),
-         SVL = scale(SVL),
-         DeltaF2 = scale(DeltaF2),
-         TA_resid = residuals(lm(TA ~ SVL)))
+anurandata <- anura_individual_data %>%
+  mutate(
+    TA_raz = scale(TA/SVL),
+    TA_resid = residuals(lm(TA ~ SVL)),
+    TA = scale(TA),
+    SVL = scale(SVL),
+    DeltaF2 = scale(DeltaF2))
 glimpse(anurandata)
 length(unique(anurandata$species))
 cor(anurandata$TA_resid, anurandata$TA_raz)
@@ -158,71 +154,110 @@ coef(fit.model, test = TRUE)
 # mas que a não há evidência na diferença da inclinação das ret
 
 # PGLS ----
-anura_data <- anuran_raw_data %>% 
-  group_by(species) %>%
-  summarise(TA = mean(TA),
-            SVL = mean(SVL),
-            DeltaF2 = mean(DeltaF2)) %>%
+#anura_data <- anura_individual_data %>% 
+#  group_by(species) %>%
+#  summarise(TA = mean(TA),
+#            SVL = mean(SVL),
+#            DeltaF2 = mean(DeltaF2)) %>%
+#  mutate(
+#    TA_raz = scale(TA/SVL),
+#    DeltaF2 = scale(DeltaF2)) 
+#row.names(anura_data) <- anura_data$species
+anura_data <- anura_species_data %>% 
   mutate(
-    TA = scale(TA),
-    SVL = scale(SVL),
+    TA_raz = scale(TA/SVL),
     DeltaF2 = scale(DeltaF2),
-    TA = residuals(lm(TA ~ SVL)))
-row.names(anura_data) <- anura_data$species
+    HearingPeak = scale(HearingPeak),
+    DF = scale(DF)) 
 
-pgls1 <- gls(DeltaF2 ~ TA,
-             correlation = corPagel(1, phy = anurantree, form = ~species),
+# Sem HearingPeak
+gls1 <- gls(DeltaF2 ~ TA_raz,
+             data = anura_data, method = "ML")
+summary(gls1)
+
+pgls1 <- gls(DeltaF2 ~ TA_raz,
+             correlation = corPagel(1, phy = anurantree, 
+                                    form = ~species),
              data = anura_data, method = "ML")
 summary(pgls1)
-R2(pgls1)
 plot(pgls1)
 
- # Plots ----
+# Com HearingPeak
+anura_data <- anura_data %>% remove_missing() # remove P. boticariana
+anurantree_edit <- drop.tip(anurantree,
+                            tip = "Phantasmarana_boticariana")
+
+# sao marginalmente correlacionadas
+cor.test(anura_data$TA_raz, anura_data$HearingPeak)
+
+# No gls tradicional funciona
+gls2 <- gls(DeltaF2 ~ HearingPeak + DF,
+             data = anura_data, # remove P. boticariana
+             method = "ML") 
+summary(gls2)
+
+# PGLS nao funciona com Pagel, ta dificil entender
+# o que ta rolando, mas eh algo na estrutura de correlacao de Pagel, mudei para
+# brownian e funciona...
+pgls2 <- gls(DeltaF2 ~ HearingPeak + DF,
+             correlation = corBrownian(phy = anurantree_edit, form = ~species),
+             data = anura_data,
+             method = "ML")
+summary(pgls2)
+
+# Plots ----
 ## Residuals models ----
 par(mfrow = c(2, 2))
 plot(fit.model) # E-PGLS
-dev.off()
-plot(pgls1) # PGLS
-
-# O mais utilizado e o mais importante
-# residual vs fitted 
+# O mais utilizado e o mais importante: residual vs fitted 
 # Avalia a linearidade e a homogeneidade da variância (homocedasticidade).
 # Espera-se um "nuvem aleatória" em torno da linha zero. 
-
 # Q-Q residuals (As vezes alguns revisores pedem)
-# Avalia a normalidade dos resíduos. tem que acompanhar aquela reta o max possivel
+# Avalia a normalidade dos residuos. tem que acompanhar aquela reta o max possivel
 
-# esses dois nem precisa, geralmente nao vejo nos artigos.
+# esses dois nem precisa, geralmente nao vejo nos artigos:
 #  Scale-Location
-# Avalia se a variância dos resíduos é constante (homocedasticidade).
+# Avalia se a variancia dos residuos e constante (homocedasticidade).
 # Residuals vs Leverage
-# Identifica valores influentes: observações que têm forte impacto na regressão.
+# Identifica valores influentes: observacoes que tem forte impacto na regressao.
+dev.off()
+
+# Residuos da PGLS tradicional
+plot(pgls1) # PGLS
 
 ## Interspecific variation ----
-ggplot(anurandata, aes(x = TA_raz, y = DeltaF2, color = species)) +  
+anurandata %>%
+  filter(!species %in% c("Hylodes_heyeri", "Phantasmarana_boticariana",
+                         "Boana_albopunctata","Rhinella_ornata")) %>%
+  ggplot(aes(x = TA_raz, y = DeltaF2, color = species)) +  
   geom_point() +
-  geom_smooth(method = "lm", se = TRUE) +
+  geom_smooth(aes(fill = species), method = "lm", se = TRUE, alpha = 0.3) +
   theme_bw() +
   scale_color_manual(values = c(
     "Crossodactylus_caramaschii" = "#8fb08d",
     "Hylodes_asper"     = "#58AD53",
     "Hylodes_cardosoi"  = "#40ED37",
     "Hylodes_phyllodes" = "#526E50",
-    "Hylodes_heyeri"    = "#87e088",
-    "Phantasmarana_boticariana" = "#33b87c",
     "Thoropa_taophora"  = "#b8336a", 
-    "Boana_semilineata" = "#8799e0",
-    "Boana_albopunctata"= "#8787e0",
-    "Rhinella_ornata"   = "#b83349"
-  )) + 
-  xlab("Relative Tympanum Area") + ylab("Frequency Range of Hearing (HFR)") +
+    "Boana_semilineata" = "#8799e0"
+  )) +
+  scale_fill_manual(values = c(   # mesmo vetor usado no color
+    "Crossodactylus_caramaschii" = "#8fb08d",
+    "Hylodes_asper"     = "#58AD53",
+    "Hylodes_cardosoi"  = "#40ED37",
+    "Hylodes_phyllodes" = "#526E50",
+    "Thoropa_taophora"  = "#b8336a", 
+    "Boana_semilineata" = "#8799e0"
+  )) +
+  xlab("Relative Tympanum Area") + 
+  ylab("Frequency Range of Hearing (HFR)") +
   theme(
-    legend.position = c(0.28, 0.10),              # Posição interna do gráfico
+    legend.position = c(0.72, 0.10),
     legend.justification = "center",
-    legend.background = element_rect(fill = "white", color = "black"),  # Caixa visível
+    legend.background = element_rect(fill = "white", color = "black"),
     legend.title = element_blank()
   ) +
-  guides(color = guide_legend(nrow = 5, byrow = TRUE))  # 3 linhas
+  guides(color = guide_legend(nrow = 3, byrow = TRUE))
 
 ## Ancestral reconstructing ----
 # We calculated the tympanum allometric residual as the deviation from the 
@@ -230,13 +265,10 @@ ggplot(anurandata, aes(x = TA_raz, y = DeltaF2, color = species)) +
 # This variable represents the allometric scaling of the auditory system, 
 # positive values indicate relatively larger tympana than expected for a given body size
 # and negative values indicate relatively smaller ones.
-anura_data <- anuran_raw_data %>% 
-  group_by(species) %>%
-  summarise(TA = mean(TA),
-            SVL = mean(SVL),
-            DeltaF2 = log(mean(DeltaF2))) %>%
-  mutate(TA_raz = log(TA/SVL)) %>%
-  dplyr::select(-SVL)
+anura_data <- anura_species_data %>% 
+  mutate(
+    TA_raz = log(TA/SVL), 
+    DeltaF2 = log(DeltaF2)) 
 
 # Tympanum allometry
 species_ta <- setNames(anura_data$TA_raz, anura_data$species)
@@ -250,16 +282,12 @@ map_ta <- setMap(map_ta, hcl.colors(n=100))
 # Delta F2
 species_deltaf2 <- setNames(anura_data$DeltaF2, anura_data$species)
 map_deltaf2 <- contMap(anurantree, species_deltaf2,
-                       #lims = c(6.4738,9.4827),
+                       lims = c(7.1426,8.6788),
                                 plot = FALSE)
 map_deltaf2 <- setMap(map_deltaf2, hcl.colors(n=100))
 
-# define seu caminho e o nome da sua figura
-#out_pdf <- file.path(getwd(), "figures", "Figure1.AncestralReconstruction.pdf")
-# PDF
-#pdf(out_pdf, width = 11, height = 4)       # inicia dispositivo
-dev.off()
 # — Bloco de plotagem —
+dev.off()
 par(mfrow = c(1, 3), mar = c(4, 4, 2, 1))
 plot(map_deltaf2, direction="rightwards", lwd=6, max.width=0.8,
      ftype="off", border="black", legend=60,
@@ -269,8 +297,9 @@ errorbar.contMap(map_deltaf2, lwd=8)
 plot.new()
 plot.window(xlim = c(-0.1, 0.1),
             ylim = get("last_plot.phylo", envir = .PlotPhyloEnv)$y.lim)
+lp <- get("last_plot.phylo", envir = .PlotPhyloEnv)
+tip_positions <- lp$yy[1:Ntip(map_deltaf2$tree)]
 
-tip_positions <- last_plot$yy[1:Ntip(map_deltaf2$tree)]
 text(
   x = rep(0, Ntip(map_deltaf2$tree)),
   y = tip_positions,
@@ -305,3 +334,4 @@ grid()
 ## clip plot
 clip(min(anura_data$TA),max(anura_data$TA),
      min(anura_data$DeltaF2),max(anura_data$DeltaF2))
+
