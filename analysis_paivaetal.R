@@ -26,7 +26,6 @@ lapply(needed_packages, require, character.only = TRUE)
 
 # Set your directory ----
 setwd("D:/repos/hearing_allometry")
-
 # Load ----
 load("raw_data.RData")
 
@@ -34,7 +33,6 @@ load("raw_data.RData")
 anura_individual_data
 # species mean data
 anura_species_data
-
 # phylogeny data
 anurantree <- read.nexus("phylogeny/tree_amphibia.tre") # phylogeny
 # remove species duplicated
@@ -78,7 +76,7 @@ p <- ggpairs(
 cor(anura_individual_data[ , c("SVL", "DeltaF2", "TA")], 
     method = "spearman", use = "complete.obs")
 # Altamente e significativamente correlacionadas
-cor.test(anura_individual_data$SVL, anura_individual_data$TA, method = "pearson") # 0.91
+cor.test(anura_individual_data$SVL, anura_individual_data$TA, method = "spearman") # 0.91
 usdm::vif(anura_individual_data[ , c("SVL", "DeltaF2", "TA")])
 
 # Save the image
@@ -88,6 +86,62 @@ ggsave(paste0(getwd(), "/figures/FigS1.ResponseCorr.pdf"), plot=p,
 ggsave(paste0(getwd(), "/figures/FigS1.ResponseCorr.png"), plot=p,
        width=7, height=5, units="in", dpi = "print", bg = 'white')
 
+# PGLS ----
+anura_data <- anura_species_data %>% 
+  mutate(
+    TA_raz = scale(TA/SVL),
+    DeltaF2 = scale(DeltaF2),
+    HearingPeak = scale(HearingPeak),
+    DF = scale(DF)) 
+
+# H1
+# The peak frequency of hearing  corresponds spectrally to the 
+# call's dominant frequency, as predicted by the Matched Filter Hypothesis
+anura_data_edit <- anura_data %>% remove_missing() # remove P. boticariana
+anurantree_edit <- drop.tip(anurantree,
+                            tip = "Phantasmarana_boticariana")
+
+# PGLS nao funciona com Pagel, ta dificil entender
+# o que ta rolando, mas eh algo na estrutura de correlacao de Pagel, mudei para
+# brownian e funciona...
+pgls1 <- gls(HearingPeak ~ DF,
+             correlation = corBrownian(phy = anurantree_edit, form = ~species),
+             data = anura_data_edit,
+             method = "ML")
+
+summary(pgls1)
+
+# Residuos padronizados
+par(mfrow = c(1, 2))
+# Residuos vs preditor
+res <- residuals(pgls1, type = "normalized")
+plot(anura_data_edit$DF, res, xlab = "Fitted values", 
+     ylab = "Residuals", main = "Residuals vs Fitted")
+abline(h = 0, lty = 2)
+# QQ-plot
+qqnorm(res); qqline(res)
+
+# H2 
+# The frequency range of hearing is related positively to the 
+# relative tympanum area in macroevolutionary (interspecific level) scenarios.
+pgls2 <- gls(DeltaF2 ~ TA_raz,
+             correlation = corBrownian(phy = anurantree, form = ~species),
+             data = anura_data, method = "ML")
+summary(pgls2)
+
+# Residuos padronizados
+par(mfrow = c(1, 2))
+# Residuos vs preditor
+res <- residuals(pgls2, type = "normalized")
+plot(anura_data$TA_raz, res, xlab = "Fitted values", 
+     ylab = "Residuals", main = "Residuals vs Fitted")
+abline(h = 0, lty = 2)
+# QQ-plot
+qqnorm(res); qqline(res)
+
+# H3: 
+# The frequency range of hearing is related positively to the 
+# relative tympanum area in micro (interspecific level) 
 # e-PGLS ----
 # transform variables if needed
 anurandata <- anura_individual_data %>%
@@ -119,111 +173,21 @@ rdf <- rrpp.data.frame(DeltaF2 = anurandata$DeltaF2,
 # Residuals: variação não explicada
 # fit model with phylogeny
 fit.model <- lm.rrpp.ws(DeltaF2 ~ TA_raz * species, data = rdf,
-                   subjects = "species",
-                   Cov = vcv(anurantree), # filogenia entra aqui para
-                   # controlar a covariancia dado o parentesco entre as especies
-                   # o que quebraria a premissa de um modelo linear. 
-                   delta = 0.5, # covariancia entre individuos 
-                   gamma = "sample", # dados desbalanceados
-                   print.progress = FALSE)
+                        subjects = "species",
+                        Cov = vcv(anurantree), # filogenia entra aqui para
+                        # controlar a covariancia dado o parentesco entre as especies
+                        # o que quebraria a premissa de um modelo linear. 
+                        delta = 0.5, # covariancia entre individuos 
+                        gamma = "sample", # dados desbalanceados
+                        #turbo = FALSE, verbose = TRUE,
+                        print.progress = FALSE
+)
 anova(fit.model)
 summary(fit.model)
-coef(fit.model, test = TRUE)
+coef(fit.model)
 
-# Efeito do TA no DeltaF2
-# Espécies com tímpanos relativamente maiores para seu tamanho corporal 
-# tendem a ouvir em frequências diferentes (DeltaF2 muda).
-# Esse efeito é independente da identidade da espécie, ou seja,
-# existe um padrão geral de associação entre o tamanho relativo do tímpano e a 
-# frequência auditiva.
-
-# Efeito da identidade da especie controlando pelo parentesco
-# A média da DeltaF2 varia entre as espécies, mesmo quando o efeito do 
-# tímpano é controlado. Ou seja, há componentes filogenéticos ou ecológicos 
-# próprios de cada espécie que afetam a frequência auditiva — pode ser evolução 
-# convergente, seleção por habitat acústico, ou especialização da comunicação.
-
-# Existe uma relação alométrica significativa entre o tamanho do tímpano (ajustado ao corpo)
-# e a frequência auditiva (DeltaF2), que é consistente entre espécies, embora 
-# essas espécies também apresentem diferenças médias significativas em suas
-# sensibilidades auditivas.
-# Isso sugere que alterações relativas na morfologia do ouvido impactam a função 
-# auditiva de forma conservada filogeneticamente, mas diferenças de linhagem também importam.
-
-# então specie significa que cada espécie tem uma média única, 
-# mas que a não há evidência na diferença da inclinação das ret
-
-# PGLS ----
-#anura_data <- anura_individual_data %>% 
-#  group_by(species) %>%
-#  summarise(TA = mean(TA),
-#            SVL = mean(SVL),
-#            DeltaF2 = mean(DeltaF2)) %>%
-#  mutate(
-#    TA_raz = scale(TA/SVL),
-#    DeltaF2 = scale(DeltaF2)) 
-#row.names(anura_data) <- anura_data$species
-anura_data <- anura_species_data %>% 
-  mutate(
-    TA_raz = scale(TA/SVL),
-    DeltaF2 = scale(DeltaF2),
-    HearingPeak = scale(HearingPeak),
-    DF = scale(DF)) 
-
-# Sem HearingPeak
-gls1 <- gls(DeltaF2 ~ TA_raz,
-             data = anura_data, method = "ML")
-summary(gls1)
-
-pgls1 <- gls(DeltaF2 ~ TA_raz,
-             correlation = corPagel(1, phy = anurantree, 
-                                    form = ~species),
-             data = anura_data, method = "ML")
-summary(pgls1)
-plot(pgls1)
-
-# Com HearingPeak
-anura_data <- anura_data %>% remove_missing() # remove P. boticariana
-anurantree_edit <- drop.tip(anurantree,
-                            tip = "Phantasmarana_boticariana")
-
-# sao marginalmente correlacionadas
-cor.test(anura_data$TA_raz, anura_data$HearingPeak)
-
-# No gls tradicional funciona
-gls2 <- gls(DeltaF2 ~ HearingPeak + DF,
-             data = anura_data, # remove P. boticariana
-             method = "ML") 
-summary(gls2)
-
-# PGLS nao funciona com Pagel, ta dificil entender
-# o que ta rolando, mas eh algo na estrutura de correlacao de Pagel, mudei para
-# brownian e funciona...
-pgls2 <- gls(DeltaF2 ~ HearingPeak + DF,
-             correlation = corBrownian(phy = anurantree_edit, form = ~species),
-             data = anura_data,
-             method = "ML")
-summary(pgls2)
-
-# Plots ----
-## Residuals models ----
-par(mfrow = c(2, 2))
-plot(fit.model) # E-PGLS
-# O mais utilizado e o mais importante: residual vs fitted 
-# Avalia a linearidade e a homogeneidade da variância (homocedasticidade).
-# Espera-se um "nuvem aleatória" em torno da linha zero. 
-# Q-Q residuals (As vezes alguns revisores pedem)
-# Avalia a normalidade dos residuos. tem que acompanhar aquela reta o max possivel
-
-# esses dois nem precisa, geralmente nao vejo nos artigos:
-#  Scale-Location
-# Avalia se a variancia dos residuos e constante (homocedasticidade).
-# Residuals vs Leverage
-# Identifica valores influentes: observacoes que tem forte impacto na regressao.
-dev.off()
-
-# Residuos da PGLS tradicional
-plot(pgls1) # PGLS
+par(mfrow = c(1, 2))
+plot(fit.model)
 
 ## Interspecific variation ----
 anurandata %>%
@@ -249,7 +213,7 @@ anurandata %>%
     "Thoropa_taophora"  = "#b8336a", 
     "Boana_semilineata" = "#8799e0"
   )) +
-  xlab("Relative Tympanum Area") + 
+  xlab("Tympanum-body ratio ") + 
   ylab("Frequency Range of Hearing (HFR)") +
   theme(
     legend.position = c(0.72, 0.10),
@@ -259,7 +223,7 @@ anurandata %>%
   ) +
   guides(color = guide_legend(nrow = 3, byrow = TRUE))
 
-## Ancestral reconstructing ----
+# Ancestral reconstructing ----
 # We calculated the tympanum allometric residual as the deviation from the 
 # expected tympanum size given body size, based on a log-log regression. 
 # This variable represents the allometric scaling of the auditory system, 
@@ -291,7 +255,7 @@ dev.off()
 par(mfrow = c(1, 3), mar = c(4, 4, 2, 1))
 plot(map_deltaf2, direction="rightwards", lwd=6, max.width=0.8,
      ftype="off", border="black", legend=60,
-     leg.txt="Frequency Range \nof Hearing (log)")
+     leg.txt="Hearing Frequence \nRange (log)")
 errorbar.contMap(map_deltaf2, lwd=8)
 
 plot.new()
@@ -314,24 +278,24 @@ errorbar.contMap(map_ta, lwd=8)
 dev.off() # "desliga" o mfrow linha 421
 
 ## Phylomorphospace ----
-par(mar=c(5.1,5.1,1.1,1.1),
-    cex.axis=0.7,cex.lab=0.9)
-anura_data <- data.frame(anura_data)
-rownames(anura_data) <- anura_data$species
-
-## graph phylomorphospace projection
-phylomorphospace(anurantree,
-                 anura_data[,c("TA_raz", "DeltaF2")],
-                 colors=cols,bty="l",node.by.map=TRUE,
-                 node.size=c(0,1.2),
-                 xlab = "Relative tympanum area (TA)",
-                 ylab="Hearing Frequence \nRange (HFR)")
-
-## overlay points onto the phylomorphospace plot
-points(anura_data$TA_raz,anura_data$DeltaF2,pch=21,bg="gray",cex=1.2)
-## add gridlines
-grid()
-## clip plot
-clip(min(anura_data$TA),max(anura_data$TA),
-     min(anura_data$DeltaF2),max(anura_data$DeltaF2))
+#par(mar=c(5.1,5.1,1.1,1.1),
+#    cex.axis=0.7,cex.lab=0.9)
+#anura_data <- data.frame(anura_data)
+#rownames(anura_data) <- anura_data$species
+#
+### graph phylomorphospace projection
+#phylomorphospace(anurantree,
+#                 anura_data[,c("TA_raz", "DeltaF2")],
+#                 colors=cols,bty="l",node.by.map=TRUE,
+#                 node.size=c(0,1.2),
+#                 xlab = "Relative tympanum area (TA)",
+#                 ylab="Hearing Frequence \nRange (HFR)")
+#?phylomorphospace
+### overlay points onto the phylomorphospace plot
+#points(anura_data$TA_raz,anura_data$DeltaF2,pch=21,bg="gray",cex=1.2)
+### add gridlines
+#grid()
+### clip plot
+#clip(min(anura_data$TA),max(anura_data$TA),
+#     min(anura_data$DeltaF2),max(anura_data$DeltaF2))
 
